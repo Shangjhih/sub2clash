@@ -1,0 +1,291 @@
+# ==========================================================
+# Mihomo Android 审计修正版 V5
+# 结论依据：规则模式阻断 UDP/443 时 Gemini/Play App 失败；切换全局模式后可用。
+# V5 恢复 QUIC/HTTP3，并补充机场配置中的 Gemini Android 后端域名。
+# ==========================================================
+
+mixed-port: 7890
+allow-lan: false
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+unified-delay: true
+tcp-concurrent: true
+keep-alive-interval: 15
+keep-alive-idle: 15
+disable-keep-alive: false
+external-controller: 127.0.0.1:9090
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+sniffer:
+  enable: true
+  force-dns-mapping: true
+  parse-pure-ip: true
+  override-destination: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+      override-destination: true
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+
+# TUN：恢复 UDP/QUIC，并启用 endpoint-independent-nat 改善移动 App 的 UDP 映射兼容性。
+tun:
+  enable: true
+  stack: mixed
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: true
+  endpoint-independent-nat: true
+  dns-hijack:
+    - any:53
+    - tcp://any:53
+
+# DNS：沿用 V4 已验证可用的直连加密 DoH + Fake-IP。
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: false
+  cache-algorithm: arc
+  prefer-h3: false
+  respect-rules: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter-mode: blacklist
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - localhost
+    - "+.localdomain"
+    - "+.home.arpa"
+    - "time.*.com"
+    - "ntp.*.com"
+    - "time.*.edu.cn"
+    - "*.time.edu.cn"
+  use-hosts: true
+  use-system-hosts: true
+  # default-nameserver字段用于解析DOH地址，如：
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  # 直接使用下面的DOH解析命中geosite:gfw的域名
+  nameserver-policy:
+    "geosite:gfw":
+      - https://1.1.1.1/dns-query
+      - https://8.8.8.8/dns-query
+  # 用于解析实际访问网站的域名
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  # proxy-server-nameserver用来解析节点中配置文件的域名
+  proxy-server-nameserver:
+     - 1.1.1.1
+     - 119.29.29.29
+    #- https://1.1.1.1/dns-query  
+    #- https://dns.google/dns-query
+  # nameserver解析失败时使用fallback的DNS列表进行解析
+  fallback:
+    - https://cloudflare-dns.com/dns-query
+    - https://dns.google/dns-query
+    - https://dns.quad9.net/dns-query
+  # 判断解析后的IP是否在海外，在海外的IP使用fallback的解析结果，国内的用nameserver解析结果
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+      - 0.0.0.0/32
+      - 127.0.0.1/32
+
+# 请把真实节点粘贴到这里。
+proxies:
+
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    include-all: true
+    proxies:
+      - DIRECT  # 导入节点后务必选择真实节点；稳定后可删除 DIRECT。
+  - name: Auto
+    type: fallback
+    include-all: true
+    proxies:
+  - name: "速度最优"
+    type: url-test
+    interval: 600
+    expected-status: 204
+    lazy: true
+    include-all: true
+    proxies:
+      
+rule-providers:
+  google:
+    type: http
+    behavior: domain
+    format: mrs
+    path: ./rules/google.mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/google.mrs
+    interval: 86400
+    proxy: Proxy
+  anthropic:
+    type: http
+    behavior: domain
+    format: mrs
+    path: ./rules/anthropic.mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/anthropic.mrs
+    interval: 86400
+    proxy: Proxy
+  telegram:
+    type: http
+    behavior: domain
+    format: mrs
+    path: ./rules/telegram.mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/telegram.mrs
+    interval: 86400
+    proxy: Proxy
+  grok:
+    type: http
+    behavior: domain
+    format: mrs
+    path: ./rules/grok.mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/xai.mrs
+    interval: 86400
+    proxy: Proxy
+  microsoft-cn:
+    type: http
+    behavior: domain
+    format: mrs
+    path: ./rules/microsoft@cn.mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/microsoft@cn.mrs
+    interval: 86400
+    proxy: Proxy
+
+rules:
+  - GEOSITE,private,DIRECT
+  - GEOIP,private,DIRECT,no-resolve
+  # V5 不再拒绝 UDP/443。全局模式可用表明 App 很可能需要 QUIC/HTTP3。
+  # - AND,((NETWORK,UDP),(DST-PORT,443)),REJECT
+  # DNS域名
+  - DOMAIN,dns.alidns.com,DIRECT
+  - DOMAIN,dns.pub,DIRECT
+  - DOMAIN,doh.pub,DIRECT
+  - DOMAIN,dot.pub,DIRECT
+  - DOMAIN,doh.360.cn,DIRECT
+  - DOMAIN,dot.360.cn,DIRECT
+
+  - AND,((NETWORK,UDP),(DST-PORT,123)),DIRECT
+
+# DNS服务器IP
+  - IP-CIDR,223.5.5.5/32,DIRECT,no-resolve
+  - IP-CIDR,223.6.6.6/32,DIRECT,no-resolve
+  - IP-CIDR6,2400:3200::1/128,DIRECT,no-resolve
+  - IP-CIDR6,2400:3200:baba::1/128,DIRECT,no-resolve
+  - IP-CIDR,119.29.29.29/32,DIRECT,no-resolve
+  - IP-CIDR,1.12.12.12/32,DIRECT,no-resolve
+  - IP-CIDR,120.53.53.53/32,DIRECT,no-resolve
+  - IP-CIDR6,2402:4e00::/128,DIRECT,no-resolve
+  - IP-CIDR6,2402:4e00:1::/128,DIRECT,no-resolve
+  - IP-CIDR,180.76.76.76/32,DIRECT,no-resolve
+  - IP-CIDR6,2400:da00::6666/128,DIRECT,no-resolve
+  - IP-CIDR,114.114.114.114/32,DIRECT,no-resolve
+  - IP-CIDR,114.114.115.115/32,DIRECT,no-resolve
+  - IP-CIDR,180.184.1.1/32,DIRECT,no-resolve
+  - IP-CIDR,180.184.2.2/32,DIRECT,no-resolve
+  - IP-CIDR,101.226.4.6/32,DIRECT,no-resolve
+  - IP-CIDR,218.30.118.6/32,DIRECT,no-resolve
+  - IP-CIDR,123.125.81.6/32,DIRECT,no-resolve
+  - IP-CIDR,140.207.198.6/32,DIRECT,no-resolve
+
+  # Google Play / Gemini 核心域名。
+  - DOMAIN,play.googleapis.com,Proxy
+  - DOMAIN,play-fe.googleapis.com,Proxy
+  - DOMAIN,services.googleapis.cn,Proxy
+  - DOMAIN,android.clients.google.com,Proxy
+  - DOMAIN,play.google.com,Proxy
+  - DOMAIN,gemini.google.com,Proxy
+  - DOMAIN,generativelanguage.googleapis.com,Proxy
+
+  # 从机场配置提取的 Gemini Android、AI Studio 与实验后端。
+  - DOMAIN,ai.google.dev,Proxy
+  - DOMAIN,alkalicore-pa.clients6.google.com,Proxy
+  - DOMAIN,alkalimakersuite-pa.clients6.google.com,Proxy
+  - DOMAIN,webchannel-alkalimakersuite-pa.clients6.google.com,Proxy
+  - DOMAIN,proactivebackend-pa.googleapis.com,Proxy
+  - DOMAIN,robinfrontend-pa.googleapis.com,Proxy
+  - DOMAIN,geller-pa.googleapis.com,Proxy
+  - DOMAIN,aisandbox-pa.googleapis.com,Proxy
+  - DOMAIN,aida.googleapis.com,Proxy
+  - DOMAIN-SUFFIX,deepmind.google,Proxy
+  - DOMAIN-SUFFIX,deepmind.com,Proxy
+  - DOMAIN-SUFFIX,generativeai.google,Proxy
+  - DOMAIN-SUFFIX,labs.google,Proxy
+  - DOMAIN-SUFFIX,notebooklm.google,Proxy
+
+  # Google 通用覆盖。
+  - DOMAIN-SUFFIX,googleapis.com,Proxy
+  - DOMAIN,mtalk.google.com,Proxy
+  - DOMAIN-SUFFIX,googleapis.cn,Proxy
+  - DOMAIN-SUFFIX,gstatic.com,Proxy
+  - DOMAIN-SUFFIX,googleusercontent.com,Proxy
+  - DOMAIN-SUFFIX,ggpht.com,Proxy
+  - DOMAIN-SUFFIX,gvt1.com,Proxy
+  - DOMAIN-SUFFIX,gvt2.com,Proxy
+  - DOMAIN-SUFFIX,googlevideo.com,Proxy
+  - DOMAIN-SUFFIX,google.com,Proxy
+  - DOMAIN-SUFFIX,google.cn,Proxy
+  - RULE-SET,google,Proxy
+
+  # Claude 主域名与移动 App 辅助服务。
+  - DOMAIN,claude.ai,Proxy
+  - DOMAIN,a-api.anthropic.com,Proxy
+  - DOMAIN,api.anthropic.com,Proxy
+  - DOMAIN,a-cdn.anthropic.com,Proxy
+  - DOMAIN-SUFFIX,anthropic.com,Proxy
+  - DOMAIN-SUFFIX,claude.com,Proxy
+  - DOMAIN-SUFFIX,siftscience.com,Proxy
+  - DOMAIN-SUFFIX,sanity.io,Proxy
+  - DOMAIN-SUFFIX,datadoghq.com,Proxy
+  - DOMAIN-SUFFIX,sentry.io,Proxy
+  - DOMAIN-SUFFIX,revenuecat.com,Proxy
+  - RULE-SET,anthropic,Proxy
+
+    # Copilot&MICROSOFT
+  - DOMAIN-SUFFIX,teams.microsoft.com,Proxy
+  - DOMAIN-SUFFIX,static.microsoft,Proxy
+  - DOMAIN-SUFFIX,office.net,Proxy
+  - DOMAIN-SUFFIX,microsoftonline.com,Proxy
+  - DOMAIN-SUFFIX,githubcopilot.com,Proxy
+  - DOMAIN-SUFFIX,cloud.microsoft,Proxy
+  - RULE-SET,microsoft-cn,DIRECT
+
+
+  # Grok / X。
+  - DOMAIN,grok.com,Proxy
+  - DOMAIN-SUFFIX,x.ai,Proxy
+  - DOMAIN-SUFFIX,x.com,Proxy
+  - DOMAIN-SUFFIX,twitter.com,Proxy
+  - DOMAIN-SUFFIX,twimg.com,Proxy
+  - RULE-SET,grok,Proxy
+  # rule-set资源列表
+
+  # Telegram
+  - RULE-SET,telegram,Proxy
+
+  # 高校域名
+  - DOMAIN-SUFFIX,edu.cn,DIRECT
+
+
+  # todesk和kaspersky等特殊使用场景直连
+  - DOMAIN-SUFFIX,todesk.com,DIRECT
+  - DOMAIN-SUFFIX,kaspersky.com,DIRECT
+
+  - GEOSITE,CN,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
+  - MATCH,Proxy

@@ -1,0 +1,5 @@
+这里填写V2rayN中复制出来的配置文件，类似于：
+vless://
+vmes://
+hy2://
+anytls://
